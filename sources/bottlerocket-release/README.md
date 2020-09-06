@@ -11,4 +11,4 @@ The information is pulled at runtime because build_id changes frequently and wou
 
 ## Colophon
 
-This text was generated from `README.tpl` using [cargo-readme](https://crates.io/crates/cargo-readme), and includes the rustdoc from `src/lib.rs`.
+This text was generated from `README.tpl` using [cargo-readme](https://crates.io/crates/cargo-readme), and includes the rustdoc from `src/lib.rs`.
