@@ -32,6 +32,11 @@ The `#[model]` attribute on Settings and its sub-structs reduces duplication and
 * [Model](src/aws-k8s-1.17/mod.rs)
 * [Overridden defaults](src/aws-k8s-1.17/override-defaults.toml)
 
+## aws-k8s-1.18: Kubernetes 1.18
+
+* [Model](src/aws-k8s-1.18/mod.rs)
+* [Overridden defaults](src/aws-k8s-1.18/override-defaults.toml)
+
 ## aws-ecs-1: Amazon ECS
 
 * [Model](src/aws-ecs-1/mod.rs)
@@ -83,7 +88,7 @@ use std::net::Ipv4Addr;
 use crate::modeled_types::{
     DNSDomain, ECSAgentLogLevel, ECSAttributeKey, ECSAttributeValue, FriendlyVersion,
     KubernetesClusterName, KubernetesLabelKey, KubernetesLabelValue, KubernetesTaintValue,
-    SingleLineString, Url, ValidBase64,
+    SingleLineString, SysctlKey, Url, ValidBase64,
 };
 
 // Kubernetes related settings. The dynamic settings are retrieved from
@@ -139,6 +144,13 @@ struct ContainerImage {
 #[model]
 struct NtpSettings {
     time_servers: Vec<Url>,
+}
+
+// Kernel settings
+#[model]
+struct KernelSettings {
+    // Values are almost always a single line and often just an integer... but not always.
+    sysctl: HashMap<SysctlKey, String>,
 }
 
 // Platform-specific settings

@@ -127,6 +127,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "e2fsprogs"
+version = "0.1.0"
+dependencies = [
+ "glibc",
+ "util-linux",
+]
+
+[[package]]
 name = "ecs-agent"
 version = "0.1.0"
 dependencies = [
@@ -219,6 +227,13 @@ dependencies = [
 
 [[package]]
 name = "kubernetes-1_17"
+version = "0.1.0"
+dependencies = [
+ "glibc",
+]
+
+[[package]]
+name = "kubernetes-1_18"
 version = "0.1.0"
 dependencies = [
  "glibc",
