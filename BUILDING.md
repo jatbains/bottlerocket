@@ -14,20 +14,20 @@ The build process artifacts and resulting images can consume in excess of 80GB i
 
 #### Linux
 
-The build system requires certain operating system packages to be installed.  
+The build system requires certain operating system packages to be installed.
 
 Ensure the following OS packages are installed:
 
-##### Ubuntu 
+##### Ubuntu
 
 ```
-apt install build-essential libssl-dev pkg-config
+apt install build-essential openssl libssl-dev pkg-config liblz4-tool
 ```
 
 ##### Fedora
 
 ```
-yum install make automake gcc openssl-devel pkg-config
+yum install make automake gcc openssl openssl-devel pkg-config lz4 perl-FindBin perl-lib
 ```
 
 
@@ -54,6 +54,10 @@ Builds rely on Docker's integrated BuildKit support, which has received many fix
 
 You'll need to have Docker installed and running, with your user account added to the `docker` group.
 Docker's [post-installation steps for Linux](https://docs.docker.com/install/linux/linux-postinstall/) will walk you through that.
+
+> Note: If you're on a newer Linux distribution using the unified cgroup hierarchy with cgroups v2, you may need to disable it to work with current versions of runc.
+> You'll know this is the case if you see an error like `docker: Error response from daemon: OCI runtime create failed: this version of runc doesn't work on cgroups v2: unknown.`
+> Set the kernel parameter `systemd.unified_cgroup_hierarchy=0` in your boot configuration (e.g. GRUB) and reboot.
 
 ### Build process
 

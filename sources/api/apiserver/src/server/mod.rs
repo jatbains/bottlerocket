@@ -36,6 +36,7 @@ fn notify_unix_socket_ready() -> Result<()> {
         ensure!(
             Command::new("systemd-notify")
                 .arg("--ready")
+                .arg("--no-block")
                 .status()
                 .context(error::SystemdNotify)?
                 .success(),
@@ -412,7 +413,7 @@ async fn reboot() -> Result<HttpResponse> {
                 Some(code) => code,
                 None => output.status.signal().unwrap_or(1),
             },
-            stderr: output.stderr
+            stderr: String::from_utf8_lossy(&output.stderr),
         }
     );
     Ok(HttpResponse::NoContent().finish())

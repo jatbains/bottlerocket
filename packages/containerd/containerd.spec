@@ -32,6 +32,17 @@ Patch1001: 1001-cri-reduce-logging-when-no-errors-have-occurred.patch
 Patch2001: 2001-selinux-add-DefaultLabels-helper.patch
 Patch2002: 2002-cri-use-default-SELinux-labels-as-a-fallback.patch
 
+# Local patch for CRI to override the default RLIMIT_NOFILE.
+# TODO: submit this upstream, including a unit test.
+Patch3001: 3001-cri-set-default-RLIMIT_NOFILE.patch
+
+# Upstream patches; can drop when we move to 1.4.1
+Patch4001: 4001-Exit-signal-forward-if-process-not-found.patch
+Patch4002: 4002-Ignore-SIGURG-signals-in-signal-forwarder.patch
+
+# Upstream patch; can drop when we move to 1.4.1
+Patch5001: 5001-Always-consume-shim-logs.patch
+
 BuildRequires: git
 BuildRequires: %{_cross_os}glibc-devel
 BuildRequires: %{_cross_os}libseccomp-devel
@@ -58,7 +69,7 @@ for bin in \
   containerd-shim-runc-v2 \
   ctr ;
 do
-  go build -buildmode pie -tags="${BUILDTAGS}" -o ${bin} %{goimport}/cmd/${bin}
+  go build -buildmode=pie -ldflags=-linkmode=external -tags="${BUILDTAGS}" -o ${bin} %{goimport}/cmd/${bin}
 done
 
 %install

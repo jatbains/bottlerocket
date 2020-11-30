@@ -36,6 +36,9 @@ Source200: migration-tmpfiles.conf
 Source201: host-containers-tmpfiles.conf
 Source202: thar-be-updates-tmpfiles.conf
 
+# 3xx sources: udev rules
+Source300: ephemeral-storage.rules
+
 BuildRequires: %{_cross_os}glibc-devel
 
 %description
@@ -134,6 +137,11 @@ Summary: Commits settings from user data, defaults, and generators at boot
 %description -n %{_cross_os}settings-committer
 %{summary}.
 
+%package -n %{_cross_os}ghostdog
+Summary: Tool to manage ephemeral disks
+%description -n %{_cross_os}ghostdog
+%{summary}.
+
 %package -n %{_cross_os}growpart
 Summary: Tool to grow partitions
 %description -n %{_cross_os}growpart
@@ -190,6 +198,7 @@ mkdir bin
     -p signpost \
     -p updog \
     -p logdog \
+    -p ghostdog \
     -p growpart \
     -p corndog \
 %if "%{_cross_variant}" == "aws-ecs-1"
@@ -197,14 +206,20 @@ mkdir bin
 %endif
     %{nil}
 
+# Next, build components that should be static.
+# * apiclient, because it needs to run from containers that don't have the same libraries available.
+# * migrations, because they need to run after a system update where available libraries can change.
+
+# First we find the migrations in the source tree.  We assume the directory name is the same as the crate name.
+migrations=()
+for migration in $(find %{_builddir}/sources/api/migration/migrations/* -mindepth 1 -maxdepth 1 -type d); do
+    migrations+=("-p $(basename ${migration})")
+done
+# Build static binaries.
 %cargo_build_static --manifest-path %{_builddir}/sources/Cargo.toml \
     -p apiclient \
+    ${migrations[*]} \
     %{nil}
-
-# Build the migrations
-for crate in $(find %{_builddir}/sources/api/migration/migrations -name 'Cargo.toml'); do
-    %cargo_build_static --manifest-path "${crate}"
-done
 
 %install
 install -d %{buildroot}%{_cross_bindir}
@@ -215,6 +230,7 @@ for p in \
   storewolf settings-committer \
   migrator \
   signpost updog logdog \
+  ghostdog \
 %if "%{_cross_variant}" == "aws-ecs-1"
   ecs-settings-applier \
 %endif
@@ -271,6 +287,9 @@ install -d %{buildroot}%{_cross_tmpfilesdir}
 install -p -m 0644 %{S:200} %{buildroot}%{_cross_tmpfilesdir}/migration.conf
 install -p -m 0644 %{S:201} %{buildroot}%{_cross_tmpfilesdir}/host-containers.conf
 install -p -m 0644 %{S:202} %{buildroot}%{_cross_tmpfilesdir}/thar-be-updates.conf
+
+install -d %{buildroot}%{_cross_udevrulesdir}
+install -p -m 0644 %{S:300} %{buildroot}%{_cross_udevrulesdir}/80-ephemeral-storage.rules
 
 %cross_scan_attribution --clarify %{_builddir}/sources/clarify.toml \
     cargo --offline --locked %{_builddir}/sources/Cargo.toml
@@ -342,6 +361,10 @@ install -p -m 0644 %{S:202} %{buildroot}%{_cross_tmpfilesdir}/thar-be-updates.co
 
 %files -n %{_cross_os}settings-committer
 %{_cross_bindir}/settings-committer
+
+%files -n %{_cross_os}ghostdog
+%{_cross_bindir}/ghostdog
+%{_cross_udevrulesdir}/80-ephemeral-storage.rules
 
 %files -n %{_cross_os}growpart
 %{_cross_sbindir}/growpart

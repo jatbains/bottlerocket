@@ -2,7 +2,7 @@
 %global _cross_allow_rpath 1
 
 Name: %{_cross_os}systemd
-Version: 245
+Version: 246
 Release: 1%{?dist}
 Summary: System and Service Manager
 License: GPL-2.0-or-later AND GPL-2.0-only AND LGPL-2.1-or-later
@@ -29,6 +29,11 @@ Patch9004: 9004-machine-id-setup-generate-stable-ID-under-Xen.patch
 
 # Local patch to handle mounting /etc with our SELinux label.
 Patch9005: 9005-core-mount-etc-with-specific-label.patch
+
+# Local patch to disable the keyed hashes feature in the journal, which
+# makes it unreadable by older versions of systemd. Can be dropped once
+# there's sufficiently broad adoption of systemd >= 246.
+Patch9006: 9006-journal-disable-keyed-hashes-for-compatibility.patch
 
 BuildRequires: gperf
 BuildRequires: intltool

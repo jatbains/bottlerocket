@@ -20,6 +20,10 @@ BUILDSYS_VERSION_IMAGE = { script = ["awk -F '[ =\"]+' '$1 == \"version\" {print
 BUILDSYS_VARIANT = "aws-k8s-1.17"
 # Product name used for file and directory naming
 BUILDSYS_NAME = "bottlerocket"
+# SDK version used for building
+BUILDSYS_SDK_VERSION="0.14.0"
+# Site for fetching the SDK
+BUILDSYS_SDK_SITE="cache.bottlerocket.aws"
 
 # These can be overridden with -e to change configuration for pubsys (`cargo
 # make repo`).  In addition, you can set RELEASE_START_TIME to determine when
@@ -41,6 +45,12 @@ PUBLISH_DATA_VOLUME_SIZE = "20"
 # that will be published to SSM when you run `cargo make ssm`.  See
 # tools/pubsys/policies/ssm/README.md for more information.
 PUBLISH_SSM_TEMPLATES_PATH = "${BUILDSYS_ROOT_DIR}/tools/pubsys/policies/ssm/defaults.toml"
+
+# Specifies whether to validate all targets when validating TUF repositories
+REPO_VALIDATE_TARGETS = "true"
+# Specifies the timeframe to look for upcoming repository metadata expirations
+REPO_METADATA_EXPIRING_WITHIN = "3 days"
+# When refreshing repositories, you can set REPO_UNSAFE_REFRESH=true to refresh repositories that have expired metadata files.
 
 # You can also set PUBLISH_REGIONS to override the list of regions from
 # Infra.toml for AMI and SSM commands; it's a comma-separated list like
@@ -71,7 +81,7 @@ DOCKER_BUILDKIT = "1"
 # on the command line.
 
 # Depends on ${BUILDSYS_ARCH}.
-BUILDSYS_SDK_IMAGE = { script = [ "echo bottlerocket/sdk-${BUILDSYS_ARCH}:v0.13.0-$(uname -m)" ] }
+BUILDSYS_SDK_IMAGE = { script = [ "echo bottlerocket/sdk-${BUILDSYS_ARCH}:v${BUILDSYS_SDK_VERSION}-$(uname -m)" ] }
 
 # Depends on ${BUILDSYS_JOBS}.
 CARGO_MAKE_CARGO_ARGS = "--jobs ${BUILDSYS_JOBS} --offline --locked"
@@ -98,12 +108,27 @@ PUBLISH_AMI_NAME_DEFAULT = "${BUILDSYS_NAME}-${BUILDSYS_VARIANT}-${BUILDSYS_ARCH
 [tasks.setup]
 script = [
 '''
+# Ensure we use a supported architecture
+case "${BUILDSYS_ARCH}" in
+   x86_64|aarch64) ;;
+   *)
+      echo "Unrecognized architecture '${BUILDSYS_ARCH}'; please use 'x86_64 or 'aarch64'"
+      exit 1
+      ;;
+esac
+
 mkdir -p ${BUILDSYS_BUILD_DIR}
 mkdir -p ${BUILDSYS_OUTPUT_DIR}
 mkdir -p ${BUILDSYS_PACKAGES_DIR}
 mkdir -p ${GO_MOD_CACHE}
+'''
+]
 
-for cmd in bash curl docker gunzip lz4 ; do
+[tasks.setup-build]
+dependencies = ["setup"]
+script = [
+'''
+for cmd in curl docker gunzip lz4; do
   if ! command -v ${cmd} >/dev/null 2>&1 ; then
     echo "required program '${cmd}' not found" >&2
     exit 1
@@ -120,7 +145,7 @@ dependencies = [
 ]
 
 [tasks.fetch-sdk]
-dependencies = ["setup"]
+dependencies = ["setup-build"]
 script_runner = "bash"
 script = [
 '''
@@ -128,7 +153,7 @@ set -o pipefail
 if ! docker image inspect ${BUILDSYS_SDK_IMAGE} >/dev/null 2>&1 ; then
   # Let curl resolve the certificates instead of the tasks resolved bundle.
   unset SSL_CERT_FILE SSL_CERT_DIR
-  if ! curl https://cache.bottlerocket.aws/${BUILDSYS_SDK_IMAGE}.tar.gz \
+  if ! curl https://${BUILDSYS_SDK_SITE}/${BUILDSYS_SDK_IMAGE}.tar.gz \
        | gunzip | docker load ; then
     echo "failed to load '${BUILDSYS_SDK_IMAGE}'" >&2
     exit 1
@@ -151,7 +176,7 @@ chmod -R o+r ${CARGO_HOME}
 ]
 
 [tasks.fetch-vendored]
-dependencies = ["setup", "fetch-sdk"]
+dependencies = ["fetch-sdk"]
 script = [
 '''
 ${BUILDSYS_TOOLS_DIR}/docker-go \
@@ -163,7 +188,7 @@ ${BUILDSYS_TOOLS_DIR}/docker-go \
 ]
 
 [tasks.unit-tests]
-dependencies = ["setup", "fetch-sdk", "fetch-sources", "fetch-vendored"]
+dependencies = ["fetch-sdk", "fetch-sources", "fetch-vendored"]
 script = [
 '''
 export VARIANT="${BUILDSYS_VARIANT}"
@@ -184,7 +209,7 @@ ${BUILDSYS_TOOLS_DIR}/docker-go \
 ]
 
 [tasks.build-tools]
-dependencies = ["setup", "fetch"]
+dependencies = ["fetch"]
 script = [
 '''
 cargo install \
@@ -340,6 +365,10 @@ pubsys-setup \
 '''
 ]
 
+[tasks.publish-setup-without-key]
+env = { "ALLOW_MISSING_KEY" = "true" }
+run_task = "publish-setup"
+
 # Builds a local repository based on the 'latest' built targets.  Uses pubsys
 # to create a repo under /build/repos, named after the arch/variant/version,
 # containing subdirectories for the repo metadata and targets.
@@ -407,11 +436,90 @@ ln -sfn "${PUBLISH_REPO_OUTPUT_DIR##*/}" "${PUBLISH_REPO_OUTPUT_DIR%/*}/latest"
 '''
 ]
 
+[tasks.validate-repo]
+dependencies = ["publish-setup-without-key", "publish-tools"]
+script_runner = "bash"
+script = [
+'''
+set -e
+
+export PATH="${BUILDSYS_TOOLS_DIR}/bin:${PATH}"
+
+if [ "${REPO_VALIDATE_TARGETS}" = "true" ]; then
+   REPO_VALIDATE_TARGETS_ARG="--validate-targets"
+fi
+
+pubsys \
+   --infra-config-path "${PUBLISH_INFRA_CONFIG_PATH}" \
+   \
+   validate-repo \
+   \
+   --repo "${PUBLISH_REPO}" \
+   --arch "${BUILDSYS_ARCH}" \
+   --variant "${BUILDSYS_VARIANT}" \
+   \
+   --root-role-path "${PUBLISH_REPO_ROOT_JSON}" \
+   ${REPO_VALIDATE_TARGETS_ARG}
+'''
+]
+
+[tasks.check-repo-expirations]
+dependencies = ["publish-setup-without-key", "publish-tools"]
+script_runner = "bash"
+script = [
+'''
+set -e
+
+export PATH="${BUILDSYS_TOOLS_DIR}/bin:${PATH}"
+
+pubsys \
+   --infra-config-path "${PUBLISH_INFRA_CONFIG_PATH}" \
+   \
+   check-repo-expirations \
+   \
+   --repo "${PUBLISH_REPO}" \
+   --arch "${BUILDSYS_ARCH}" \
+   --variant "${BUILDSYS_VARIANT}" \
+   \
+   --root-role-path "${PUBLISH_REPO_ROOT_JSON}" \
+   --expiration-limit "${REPO_METADATA_EXPIRING_WITHIN}"
+'''
+]
+
+[tasks.refresh-repo]
+dependencies = ["publish-setup", "publish-tools"]
+script_runner = "bash"
+script = [
+'''
+set -e
+
+export PATH="${BUILDSYS_TOOLS_DIR}/bin:${PATH}"
+
+if [ "${REPO_UNSAFE_REFRESH}" = "true" ]; then
+   REPO_UNSAFE_REFRESH_ARG="--unsafe-refresh"
+fi
+
+pubsys \
+   --infra-config-path "${PUBLISH_INFRA_CONFIG_PATH}" \
+   \
+   refresh-repo \
+   \
+   --repo "${PUBLISH_REPO}" \
+   --arch "${BUILDSYS_ARCH}" \
+   --variant "${BUILDSYS_VARIANT}" \
+   \
+   --root-role-path "${PUBLISH_REPO_ROOT_JSON}" \
+   --repo-expiration-policy-path "${PUBLISH_EXPIRATION_POLICY_PATH}" \
+   ${REPO_UNSAFE_REFRESH_ARG} \
+   --outdir "${PUBLISH_REPO_OUTPUT_DIR}"
+'''
+]
+
 [tasks.ami]
 # Rather than depend on "build", which currently rebuilds images each run, we
 # depend on publish-tools and check for the image files below to save time.
 # This does mean that `cargo make` must be run before `cargo make ami`.
-dependencies = ["publish-tools"]
+dependencies = ["setup-build", "publish-tools"]
 script_runner = "bash"
 script = [
 '''
@@ -437,16 +545,6 @@ fi
 lz4 -df "${rootlz4}" "${root_image}"
 lz4 -df "${datalz4}" "${data_image}"
 
-# Canonicalize architecture identifier to the value recognized by EC2.
-case "${BUILDSYS_ARCH,,}" in
-   arm64|aarch64)
-      arch=arm64 ;;
-   x86_64|amd64)
-      arch=x86_64 ;;
-   *)
-      arch="${BUILDSYS_ARCH}" ;;
-esac
-
 ami_output="${BUILDSYS_OUTPUT_DIR}/${BUILDSYS_NAME_FULL}-amis.json"
 ami_output_latest="${BUILDSYS_OUTPUT_DIR}/latest/${BUILDSYS_NAME_VARIANT}-amis.json"
 
@@ -462,7 +560,7 @@ pubsys \
    ${PUBLISH_ROOT_VOLUME_SIZE:+--root-volume-size "${PUBLISH_ROOT_VOLUME_SIZE}"} \
    --data-volume-size "${PUBLISH_DATA_VOLUME_SIZE}" \
    \
-   --arch "${arch}" \
+   --arch "${BUILDSYS_ARCH}" \
    --name "${ami_name}" \
    --description "${PUBLISH_AMI_DESCRIPTION:-${ami_name}}" \
    \
