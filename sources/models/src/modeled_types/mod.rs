@@ -42,11 +42,17 @@ pub mod error {
         #[snafu(display("{} given invalid input: {}", thing, input))]
         BigPattern { thing: String, input: String },
 
+        #[snafu(display("Invalid Kubernetes authentication mode '{}'", input))]
+        InvalidAuthenticationMode { input: String },
+
         #[snafu(display("Given invalid cluster name '{}': {}", name, msg))]
         InvalidClusterName { name: String, msg: String },
 
         #[snafu(display("Invalid domain name '{}': {}", input, msg))]
         InvalidDomainName { input: String, msg: String },
+
+        #[snafu(display("Invalid Linux lockdown mode '{}'", input))]
+        InvalidLockdown { input: String },
 
         #[snafu(display("Invalid sysctl key '{}': {}", input, msg))]
         InvalidSysctlKey { input: String, msg: String },

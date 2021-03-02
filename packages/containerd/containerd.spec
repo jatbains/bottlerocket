@@ -2,8 +2,9 @@
 %global gorepo containerd
 %global goimport %{goproject}/%{gorepo}
 
-%global gover 1.3.7
+%global gover 1.4.3
 %global rpmver %{gover}
+%global gitrev 269548fa27e0089a8b8278fc4fc781d7f65a939b
 
 %global _dwz_low_mem_die_limit 0
 
@@ -19,29 +20,17 @@ Source2: containerd-config-toml_aws-k8s
 Source3: containerd-config-toml_aws-dev
 Source4: containerd-config-toml_aws-ecs-1
 Source5: containerd-tmpfiles.conf
+Source6: containerd-config-toml_vmware-dev
 Source1000: clarify.toml
-
-# Upstream patch; can drop when we move to v1.4.0.
-Patch0001: 0001-Use-spec-s-mountLabel-when-mounting-the-rootfs.patch
 
 # TODO: submit this upstream.
 Patch1001: 1001-cri-reduce-logging-when-no-errors-have-occurred.patch
 
-# Local patches for CRI to use the default system SELinux labels.
-# TODO: these need to be reworked for the MCS changes in v1.4.0.
-Patch2001: 2001-selinux-add-DefaultLabels-helper.patch
-Patch2002: 2002-cri-use-default-SELinux-labels-as-a-fallback.patch
-
-# Local patch for CRI to override the default RLIMIT_NOFILE.
 # TODO: submit this upstream, including a unit test.
-Patch3001: 3001-cri-set-default-RLIMIT_NOFILE.patch
+Patch1002: 1002-cri-set-default-RLIMIT_NOFILE.patch
 
-# Upstream patches; can drop when we move to 1.4.1
-Patch4001: 4001-Exit-signal-forward-if-process-not-found.patch
-Patch4002: 4002-Ignore-SIGURG-signals-in-signal-forwarder.patch
-
-# Upstream patch; can drop when we move to 1.4.1
-Patch5001: 5001-Always-consume-shim-logs.patch
+# TODO: rework this so it's suitable for upstream.
+Patch1003: 1003-cri-relabel-volumes-after-copying-source-files.patch
 
 BuildRequires: git
 BuildRequires: %{_cross_os}glibc-devel
@@ -49,7 +38,6 @@ BuildRequires: %{_cross_os}libseccomp-devel
 Requires: %{_cross_os}cni-plugins
 Requires: %{_cross_os}libseccomp
 Requires: %{_cross_os}runc
-Requires: %{_cross_os}socat
 Requires: %{_cross_os}systemd
 
 %description
@@ -62,6 +50,8 @@ Requires: %{_cross_os}systemd
 %build
 %cross_go_configure %{goimport}
 export BUILDTAGS="no_btrfs seccomp selinux"
+export LD_VERSION="-X github.com/containerd/containerd/version.Version=%{gover}+bottlerocket"
+export LD_REVISION="-X github.com/containerd/containerd/version.Revision=%{gitrev}"
 for bin in \
   containerd \
   containerd-shim \
@@ -69,7 +59,12 @@ for bin in \
   containerd-shim-runc-v2 \
   ctr ;
 do
-  go build -buildmode=pie -ldflags=-linkmode=external -tags="${BUILDTAGS}" -o ${bin} %{goimport}/cmd/${bin}
+  go build \
+     -buildmode=pie \
+     -ldflags="-linkmode=external ${LD_VERSION} ${LD_REVISION}" \
+     -tags="${BUILDTAGS}" \
+     -o ${bin} \
+     %{goimport}/cmd/${bin}
 done
 
 %install
@@ -89,7 +84,7 @@ install -p -m 0644 %{S:1} %{buildroot}%{_cross_unitdir}/containerd.service
 
 install -d %{buildroot}%{_cross_templatedir}
 install -d %{buildroot}%{_cross_factorydir}%{_cross_sysconfdir}/containerd
-install -p -m 0644 %{S:2} %{S:3} %{S:4} %{buildroot}%{_cross_templatedir}
+install -p -m 0644 %{S:2} %{S:3} %{S:4} %{S:6} %{buildroot}%{_cross_templatedir}
 
 install -d %{buildroot}%{_cross_tmpfilesdir}
 install -p -m 0644 %{S:5} %{buildroot}%{_cross_tmpfilesdir}/containerd.conf

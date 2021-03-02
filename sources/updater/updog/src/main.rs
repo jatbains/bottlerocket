@@ -5,15 +5,16 @@ mod error;
 mod transport;
 
 use crate::error::Result;
-use crate::transport::{HttpQueryRepo, HttpQueryTransport};
+use crate::transport::{HttpQueryTransport, QueryParams};
 use bottlerocket_release::BottlerocketRelease;
 use chrono::Utc;
+use log::debug;
 use model::modeled_types::FriendlyVersion;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use signal_hook::{iterator::Signals, SIGTERM};
 use signpost::State;
-use simplelog::{Config as LogConfig, LevelFilter, TermLogger, TerminalMode};
+use simplelog::{Config as LogConfig, LevelFilter, SimpleLogger};
 use snafu::{ErrorCompat, OptionExt, ResultExt};
 use std::convert::{TryFrom, TryInto};
 use std::fs::{self, File, OpenOptions};
@@ -22,9 +23,9 @@ use std::path::Path;
 use std::process;
 use std::str::FromStr;
 use std::thread;
-use tempfile::TempDir;
-use tough::{ExpirationEnforcement, Limits, Repository, Settings};
+use tough::{Repository, RepositoryLoader};
 use update_metadata::{find_migrations, load_manifest, Manifest, Update};
+use url::Url;
 
 #[cfg(target_arch = "x86_64")]
 const TARGET_ARCH: &str = "x86_64";
@@ -59,6 +60,8 @@ struct Config {
     seed: u32,
     version_lock: String,
     ignore_waves: bool,
+    https_proxy: Option<String>,
+    no_proxy: Option<Vec<String>>,
     // TODO API sourced configuration, eg.
     // blacklist: Option<Vec<Version>>,
     // mode: Option<{Automatic, Managed, Disabled}>
@@ -112,27 +115,23 @@ fn load_config() -> Result<Config> {
     Ok(config)
 }
 
-fn load_repository<'a>(
-    transport: &'a HttpQueryTransport,
-    config: &'a Config,
-    tough_datastore: &'a Path,
-) -> Result<HttpQueryRepo<'a>> {
+fn load_repository(transport: HttpQueryTransport, config: &Config) -> Result<Repository> {
     fs::create_dir_all(METADATA_PATH).context(error::CreateMetadataCache {
         path: METADATA_PATH,
     })?;
-    Repository::load(
-        transport,
-        Settings {
-            root: File::open(TRUSTED_ROOT_PATH).context(error::OpenRoot {
-                path: TRUSTED_ROOT_PATH,
-            })?,
-            datastore: tough_datastore,
-            metadata_base_url: &config.metadata_base_url,
-            targets_base_url: &config.targets_base_url,
-            limits: Limits::default(),
-            expiration_enforcement: ExpirationEnforcement::Safe,
-        },
+    RepositoryLoader::new(
+        File::open(TRUSTED_ROOT_PATH).context(error::OpenRoot {
+            path: TRUSTED_ROOT_PATH,
+        })?,
+        Url::parse(&config.metadata_base_url).context(error::UrlParse {
+            url: &config.metadata_base_url,
+        })?,
+        Url::parse(&config.targets_base_url).context(error::UrlParse {
+            url: &config.targets_base_url,
+        })?,
     )
+    .transport(transport)
+    .load()
     .context(error::Metadata)
 }
 
@@ -211,7 +210,7 @@ fn update_required<'a>(
 }
 
 fn write_target_to_disk<P: AsRef<Path>>(
-    repository: &HttpQueryRepo<'_>,
+    repository: &Repository,
     target: &str,
     disk_path: P,
 ) -> Result<()> {
@@ -236,8 +235,8 @@ fn write_target_to_disk<P: AsRef<Path>>(
 /// Store required migrations for an update in persistent storage. All intermediate migrations
 /// between the current version and the target version must be retrieved.
 fn retrieve_migrations(
-    repository: &HttpQueryRepo<'_>,
-    transport: &HttpQueryTransport,
+    repository: &Repository,
+    query_params: &mut QueryParams,
     manifest: &Manifest,
     update: &Update,
     current_version: &Version,
@@ -263,15 +262,11 @@ fn retrieve_migrations(
         .cache(METADATA_PATH, MIGRATION_PATH, Some(&targets), true)
         .context(error::RepoCacheMigrations)?;
     // Set a query parameter listing the required migrations
-    transport
-        .queries_get_mut()
-        .context(error::TransportBorrow)?
-        .push(("migrations".to_owned(), targets.join(",")));
-
+    query_params.add("migrations", targets.join(","));
     Ok(())
 }
 
-fn update_image(update: &Update, repository: &HttpQueryRepo<'_>) -> Result<()> {
+fn update_image(update: &Update, repository: &Repository) -> Result<()> {
     let mut gpt_state = State::load().context(error::PartitionTableRead)?;
     gpt_state.clear_inactive();
     // Write out the clearing of the inactive partition immediately, because we're about to
@@ -308,16 +303,12 @@ fn revert_update_flags() -> Result<()> {
 }
 
 fn set_common_query_params(
-    transport: &HttpQueryTransport,
+    query_params: &mut QueryParams,
     current_version: &Version,
     config: &Config,
 ) -> Result<()> {
-    let mut transport_borrow = transport
-        .queries_get_mut()
-        .context(error::TransportBorrow)?;
-
-    transport_borrow.push((String::from("version"), current_version.to_string()));
-    transport_borrow.push((String::from("seed"), config.seed.to_string()));
+    query_params.add("version", current_version.to_string());
+    query_params.add("seed", config.seed.to_string());
 
     Ok(())
 }
@@ -465,16 +456,59 @@ fn initiate_reboot() -> Result<()> {
     Ok(())
 }
 
+/// Our underlying HTTP client, reqwest, supports proxies by reading the HTTPS_PROXY and NO_PROXY
+/// environment variables. Bottlerocket services can source proxy.env before running, but updog is
+/// not a service, so we read these values from the config file and add them to the environment
+/// here.
+fn set_https_proxy_environment_variables(
+    https_proxy: &Option<String>,
+    no_proxy: &Option<Vec<String>>,
+) -> Result<()> {
+    let proxy = match https_proxy {
+        Some(s) if !s.is_empty() => s.to_owned(),
+        // without https_proxy, no_proxy does nothing, so we are done
+        _ => return Ok(()),
+    };
+
+    // TODO - remove this workaround, https://github.com/bottlerocket-os/bottlerocket/issues/1332
+    // reqwest needs a URL protocol scheme to be present, but other implementations assume
+    // `http://` as the scheme when none is present. We need to check the `HTTPS_PROXY` env and
+    // reset it with `http://` when no scheme is present. This workaround will no longer be needed
+    // when both bottlerocket and tough are using reqwest >= 0.11.1.
+    let proxy = if Url::parse(&proxy).is_ok() {
+        // the proxy value is OK, it has a scheme
+        debug!("setting HTTPS_PROXY={}", proxy);
+        proxy
+    } else {
+        // try prepending the default scheme
+        let prepended = format!("http://{}", proxy);
+        // now we expect a valid URL
+        let _ = Url::parse(&prepended).context(error::Proxy { proxy })?;
+        // now we know we have a string that will work with reqwest
+        debug!("prepended https:// and setting HTTPS_PROXY={}", prepended);
+        prepended
+    };
+
+    std::env::set_var("HTTPS_PROXY", &proxy);
+    if let Some(no_proxy) = no_proxy {
+        if !no_proxy.is_empty() {
+            let no_proxy_string = no_proxy.join(",");
+            debug!("setting NO_PROXY={}", no_proxy_string);
+            std::env::set_var("NO_PROXY", &no_proxy_string);
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn main_inner() -> Result<()> {
     // Parse and store the arguments passed to the program
     let arguments = parse_args(std::env::args());
 
-    // TerminalMode::Mixed will send errors to stderr and anything less to stdout.
-    TermLogger::init(
+    // SimpleLogger will send errors to stderr and anything less to stdout.
+    SimpleLogger::init(
         arguments.log_level,
         LogConfig::default(),
-        TerminalMode::Mixed,
     )
     .context(error::Logger)?;
 
@@ -482,12 +516,15 @@ fn main_inner() -> Result<()> {
         serde_plain::from_str::<Command>(&arguments.subcommand).unwrap_or_else(|_| usage());
 
     let config = load_config()?;
+    set_https_proxy_environment_variables(&config.https_proxy, &config.no_proxy)?;
     let current_release = BottlerocketRelease::new().context(error::ReleaseVersion)?;
     let variant = arguments.variant.unwrap_or(current_release.variant_id);
     let transport = HttpQueryTransport::new();
-    set_common_query_params(&transport, &current_release.version_id, &config)?;
-    let tough_datastore = TempDir::new().context(error::CreateTempDir)?;
-    let repository = load_repository(&transport, &config, tough_datastore.path())?;
+    // get a shared pointer to the transport's query_params so we can add metrics information to
+    // the transport's HTTP calls.
+    let mut query_params = transport.query_params();
+    set_common_query_params(&mut query_params, &current_release.version_id, &config)?;
+    let repository = load_repository(transport, &config)?;
     let manifest = load_manifest(&repository)?;
     let ignore_waves = arguments.ignore_waves || config.ignore_waves;
     match command {
@@ -526,15 +563,10 @@ fn main_inner() -> Result<()> {
                 arguments.force_version,
             )? {
                 eprintln!("Starting update to {}", u.version);
-
-                transport
-                    .queries_get_mut()
-                    .context(error::TransportBorrow)?
-                    .push((String::from("target"), u.version.to_string()));
-
+                query_params.add("target", u.version.to_string());
                 retrieve_migrations(
                     &repository,
-                    &transport,
+                    &mut query_params,
                     &manifest,
                     u,
                     &current_release.version_id,
@@ -644,6 +676,8 @@ mod tests {
             seed: 123,
             version_lock: "latest".to_string(),
             ignore_waves: false,
+            https_proxy: None,
+            no_proxy: None,
         };
         let version = Version::parse("1.18.0").unwrap();
         let variant = String::from("bottlerocket-aws-eks");
@@ -675,6 +709,8 @@ mod tests {
             seed: 1487,
             version_lock: "latest".to_string(),
             ignore_waves: false,
+            https_proxy: None,
+            no_proxy: None,
         };
 
         let version = Version::parse("0.1.3").unwrap();
@@ -711,6 +747,8 @@ mod tests {
             seed: 123,
             version_lock: "latest".to_string(),
             ignore_waves: false,
+            https_proxy: None,
+            no_proxy: None,
         };
 
         let version = Version::parse("1.10.0").unwrap();
@@ -751,6 +789,8 @@ mod tests {
             seed: 123,
             version_lock: "latest".to_string(),
             ignore_waves: false,
+            https_proxy: None,
+            no_proxy: None,
         };
 
         let version = Version::parse("1.10.0").unwrap();
@@ -832,6 +872,8 @@ mod tests {
             seed: first_wave_seed,
             version_lock: "latest".to_string(),
             ignore_waves: false,
+            https_proxy: None,
+            no_proxy: None,
         };
 
         // Two waves; the 1st wave that starts immediately, and the final wave which starts in one hour

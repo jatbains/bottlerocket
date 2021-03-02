@@ -13,39 +13,51 @@ This `Settings` essentially becomes the schema for the variant's data store.
 
 At the field level, standard Rust types can be used, or ["modeled types"](src/modeled_types) that add input validation.
 
-Default values are specified in [defaults.toml](defaults.toml) and can be overridden by each variant.
+Default values are specified in .toml files in each variant's `defaults.d` directory under [src](src).
+(For example, see the [aws-ecs-1 defaults](src/aws-ecs-1/defaults.d/).)
+Entries are sorted by filename, and later entries take precedence.
 
 The `#[model]` attribute on Settings and its sub-structs reduces duplication and adds some required metadata; see [its docs](model-derive/) for details.
 
 ## aws-k8s-1.15: Kubernetes 1.15
 
 * [Model](src/aws-k8s-1.15/mod.rs)
-* [Overridden defaults](src/aws-k8s-1.15/override-defaults.toml)
+* [Default settings](src/aws-k8s-1.15/defaults.d/)
 
 ## aws-k8s-1.16: Kubernetes 1.16
 
 * [Model](src/aws-k8s-1.16/mod.rs)
-* [Overridden defaults](src/aws-k8s-1.16/override-defaults.toml)
+* [Default settings](src/aws-k8s-1.16/defaults.d/)
 
 ## aws-k8s-1.17: Kubernetes 1.17
 
 * [Model](src/aws-k8s-1.17/mod.rs)
-* [Overridden defaults](src/aws-k8s-1.17/override-defaults.toml)
+* [Default settings](src/aws-k8s-1.17/defaults.d/)
 
 ## aws-k8s-1.18: Kubernetes 1.18
 
 * [Model](src/aws-k8s-1.18/mod.rs)
-* [Overridden defaults](src/aws-k8s-1.18/override-defaults.toml)
+* [Default settings](src/aws-k8s-1.18/defaults.d/)
+
+## aws-k8s-1.19: Kubernetes 1.19
+
+* [Model](src/aws-k8s-1.19/mod.rs)
+* [Default settings](src/aws-k8s-1.19/defaults.d/)
 
 ## aws-ecs-1: Amazon ECS
 
 * [Model](src/aws-ecs-1/mod.rs)
-* [Overridden defaults](src/aws-ecs-1/override-defaults.toml)
+* [Default settings](src/aws-ecs-1/defaults.d/)
 
-## aws-dev: Development build
+## aws-dev: AWS development build
 
 * [Model](src/aws-dev/mod.rs)
-* [Overridden defaults](src/aws-dev/override-defaults.toml)
+* [Default settings](src/aws-dev/defaults.d/)
+
+## vmware-dev: VMWare development build
+
+* [Model](src/vmware-dev/mod.rs)
+* [Default settings](src/vmware-dev/defaults.d/)
 
 # This directory
 
@@ -86,23 +98,38 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
 use crate::modeled_types::{
-    DNSDomain, ECSAgentLogLevel, ECSAttributeKey, ECSAttributeValue, FriendlyVersion,
-    KubernetesClusterName, KubernetesLabelKey, KubernetesLabelValue, KubernetesTaintValue,
-    SingleLineString, SysctlKey, Url, ValidBase64,
+    DNSDomain, ECSAgentLogLevel, ECSAttributeKey, ECSAttributeValue, FriendlyVersion, Identifier,
+    KubernetesAuthenticationMode, KubernetesBootstrapToken, KubernetesClusterName,
+    KubernetesLabelKey, KubernetesLabelValue, KubernetesTaintValue,
+    Lockdown, SingleLineString, SysctlKey, Url, ValidBase64,
 };
+
+// Kubernetes static pod manifest settings
+#[model]
+struct StaticPod {
+    enabled: bool,
+    manifest: ValidBase64,
+}
 
 // Kubernetes related settings. The dynamic settings are retrieved from
 // IMDS via Sundog's child "Pluto".
 #[model]
 struct KubernetesSettings {
-    // Settings we require the user to specify, likely via user data.
+    // Settings that must be specified via user data or through API requests.  Not all settings are
+    // useful for all modes. For example, in standalone mode the user does not need to specify any
+    // cluster information, and the bootstrap token is only needed for TLS authentication mode.
     cluster_name: KubernetesClusterName,
     cluster_certificate: ValidBase64,
     api_server: Url,
     node_labels: HashMap<KubernetesLabelKey, KubernetesLabelValue>,
     node_taints: HashMap<KubernetesLabelKey, KubernetesTaintValue>,
+    static_pods: HashMap<Identifier, StaticPod>,
+    authentication_mode: KubernetesAuthenticationMode,
+    bootstrap_token: KubernetesBootstrapToken,
+    standalone_mode: bool,
 
-    // Dynamic settings.
+    // Settings where we generate a value based on the runtime environment.  The user can specify a
+    // value to override the generated one, but typically would not.
     max_pods: u32,
     cluster_dns_ip: Ipv4Addr,
     cluster_domain: DNSDomain,
@@ -138,6 +165,15 @@ struct ContainerImage {
     source: Url,
     enabled: bool,
     superpowered: bool,
+    user_data: ValidBase64,
+}
+
+// Network settings. These settings will affect host service components' network behavior
+#[model]
+struct NetworkSettings {
+    https_proxy: Url,
+    // We allow some flexibility in NO_PROXY values because different services support different formats.
+    no_proxy: Vec<SingleLineString>,
 }
 
 // NTP settings
@@ -149,6 +185,7 @@ struct NtpSettings {
 // Kernel settings
 #[model]
 struct KernelSettings {
+    lockdown: Lockdown,
     // Values are almost always a single line and often just an integer... but not always.
     sysctl: HashMap<SysctlKey, String>,
 }
@@ -157,6 +194,14 @@ struct KernelSettings {
 #[model]
 struct AwsSettings {
     region: SingleLineString,
+}
+
+// Metrics settings
+#[model]
+struct MetricsSettings {
+    metrics_url: Url,
+    send_metrics: bool,
+    service_checks: Vec<String>,
 }
 
 ///// Internal services

@@ -33,7 +33,9 @@ You can look at [existing issues](https://github.com/bottlerocket-os/bottlerocke
 If not, you can select from a few templates and get some guidance on the type of information that would be most helpful.
 [Contact us with a new issue here.](https://github.com/bottlerocket-os/bottlerocket/issues/new/choose)
 
-We don't have other communication channels set up quite yet, but don't worry about making an issue!
+If you just have questions about Bottlerocket, please feel free to [start or join a discussion](https://github.com/bottlerocket-os/bottlerocket/discussions).
+
+We don't have other communication channels set up quite yet, but don't worry about making an issue or a discussion thread!
 You can let us know about things that seem difficult, or even ways you might like to help.
 
 ## Variants
@@ -260,7 +262,7 @@ motd = "my own value!"
 
 Here we'll describe each setting you can change.
 
-**Note:** You can see the default values (for any settings that are not generated at runtime) by looking at [defaults.toml](sources/models/defaults.toml).
+**Note:** You can see the default values (for any settings that are not generated at runtime) by looking in the `defaults.d` directory for a variant, for example [aws-ecs-1](sources/models/src/aws-ecs-1/defaults.d/).
 
 When you're sending settings to the API, or receiving settings from the API, they're in a structured JSON format.
 This allows modification of any number of keys at once.
@@ -286,7 +288,7 @@ You should [specify them in user data](#using-user-data).
 * `settings.kubernetes.cluster-certificate`: This is the base64-encoded certificate authority of the cluster.
 * `settings.kubernetes.api-server`: This is the cluster's Kubernetes API endpoint.
 
-The following settings can be optionally set to customize the node labels and taints. 
+The following settings can be optionally set to customize the node labels and taints.
 * `settings.kubernetes.node-labels`: [Labels](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/) in the form of key, value pairs added when registering the node in the cluster.
 * `settings.kubernetes.node-taints`: [Taints](https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/) in the form of key, value and effect entries added when registering the node in the cluster.
   * Example user data for setting up labels and taints:
@@ -301,6 +303,14 @@ The following settings can be optionally set to customize the node labels and ta
 
 The following settings are optional and allow you to further configure your cluster.
 * `settings.kubernetes.cluster-domain`: The DNS domain for this cluster, allowing all Kubernetes-run containers to search this domain before the host's search domains.  Defaults to `cluster.local`.
+* `settings.kubernetes.standalone-mode`: Whether to run the kubelet in standalone mode, without connecting to an API server.  Defaults to `false`.
+* `settings.kubernetes.authentication-mode`: Which authentication method the kubelet should use to connect to the API server, and for incoming requests.  Defaults to `aws` for AWS variants, and `tls` for other variants.
+* `settings.kubernetes.bootstrap-token`: The token to use for [TLS bootstrapping](https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet-tls-bootstrapping/).  This is only used with the `tls` authentication mode, and is otherwise ignored.
+
+You can also optionally specify static pods for your node with the following settings.
+Static pods can be particularly useful when running in standalone mode.
+* `settings.kubernetes.static-pods.<custom identifier>.manifest`: A base64-encoded pod manifest.
+* `settings.kubernetes.static-pods.<custom identifier>.enabled`: Whether the static pod is enabled.
 
 The following settings are set for you automatically by [pluto](sources/api/) based on runtime instance information, but you can override them if you know what you're doing!
 * `settings.kubernetes.max-pods`: The maximum number of pods that can be scheduled on this node (limited by number of available IPv4 addresses)
@@ -331,7 +341,7 @@ These settings can be changed at any time.
   Bottlerocket enables the `json-file`, `awslogs`, and `none` drivers by default.
 * `settings.ecs.allow-privileged-containers`: Whether launching privileged containers is allowed on the container instance.
   If this value is set to false, privileged containers are not permitted.
-  Bottlerocket sets this value to false by default. 
+  Bottlerocket sets this value to false by default.
 * `settings.ecs.loglevel`: The level of verbosity for the ECS agent's logs.
   Supported values are `debug`, `info`, `warn`, `error`, and `crit`, and the default is `info`.
 * `settings.ecs.enable-spot-instance-draining`: If the instance receives a spot termination notice, the agent will set the instance's state to `DRAINING`, so the workload can be moved gracefully before the instance is removed. Defaults to `false`.
@@ -344,12 +354,37 @@ These settings can be changed at any time.
 * `settings.updates.version-lock`: Controls the version that will be selected when you issue an update request.  Can be locked to a specific version like `v1.0.0`, or `latest` to take the latest available version.  Defaults to `latest`.
 * `settings.updates.ignore-waves`: Updates are rolled out in waves to reduce the impact of issues.  For testing purposes, you can set this to `true` to ignore those waves and update immediately.
 
+#### Network settings
+
+##### Proxy settings
+
+These settings will configure the proxying behavior of the following services:
+* For all variants:
+    * [containerd.service](packages/containerd/containerd.service)
+    * [host-containerd.service](packages/host-ctr/host-containerd.service)
+* For Kubernetes variants:
+    * [kubelet.service](packages/kubernetes-1.18/kubelet.service)
+* For the ECS variant:
+    * [docker.service](packages/docker-engine/docker.service)
+    * [ecs.service](packages/ecs-agent/ecs.service)
+
+* `settings.network.https-proxy`: The HTTPS proxy server to be used by services listed above.
+* `settings.network.no-proxy`: A list of hosts that are excluded from proxying.
+
+The no-proxy list will automatically include entries for localhost.
+
+If you're running a Kubernetes variant, the no-proxy list will automatically include the Kubernetes API server endpoint and other commonly used Kubernetes DNS suffixes to facilitate intra-cluster networking.
+
 #### Time settings
 
 * `settings.ntp.time-servers`: A list of NTP servers used to set and verify the system time.
 
 #### Kernel settings
 
+* `settings.kernel.lockdown`: This allows further restrictions on what the Linux kernel will allow, for example preventing the loading of unsigned modules.
+  May be set to "none" (the default), "integrity", or "confidentiality".
+  **Important note:** this setting cannot be lowered (toward 'none') at runtime.
+  You must reboot for a change to a lower level to take effect.
 * `settings.kernel.sysctl`: Key/value pairs representing Linux kernel parameters.
   Remember to quote keys (since they often contain ".") and to quote all values.
   * Example user data for setting up sysctl:
@@ -373,6 +408,11 @@ These settings can be changed at any time.
 [`admin`](https://github.com/bottlerocket-os/bottlerocket-admin-container) and [`control`](https://github.com/bottlerocket-os/bottlerocket-control-container) are our default host containers, but you're free to change this.
 Beyond just changing the settings above to affect the `admin` and `control` containers, you can add and remove host containers entirely.
 As long as you define the three fields above -- `source` with a URI, and `enabled` and `superpowered` with true/false -- you can add host containers with an API call or user data.
+
+You can optionally define a `user-data` field with arbitrary base64-encoded data, which will be made available in the container at `/.bottlerocket/host-containers/$HOST_CONTAINER_NAME/user-data`.
+(It was inspired by instance user data, but is entirely separate; it can be any data your host container feels like interpreting.)
+
+Keep in mind that the default admin container (since Bottlerocket v1.0.6) relies on `user-data` to store SSH keys.  You can set `user-data` to [customize the keys](https://github.com/bottlerocket-os/bottlerocket-admin-container/#authenticating-with-the-admin-container), or you can use it for your own purposes in a custom container.
 
 Here's an example of adding a custom host container with API calls:
 ```

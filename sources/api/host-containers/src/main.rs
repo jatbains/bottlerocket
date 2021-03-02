@@ -1,9 +1,14 @@
 /*!
 # Background
 
-host-containers is a tool that queries the API for the currently enabled host containers and
-ensures the relevant systemd service is enabled/started or disabled/stopped for each one depending
-on its 'enabled' flag.
+host-containers ensures that host containers are running as defined in system settings.
+
+It queries the API for their settings, then configures the system by:
+* creating a user-data file in the host container's persistent storage area, if a base64-encoded
+  user-data setting is set for the host container.  (The decoded contents are available to the
+  container at /.bottlerocket/host-containers/NAME/user-data)
+* creating an environment file used by a host-container-specific instance of a systemd service
+* ensuring the host container's systemd service is enabled/started or disabled/stopped
 */
 
 #![deny(rust_2018_idioms)]
@@ -11,7 +16,7 @@ on its 'enabled' flag.
 #[macro_use]
 extern crate log;
 
-use simplelog::{Config as LogConfig, LevelFilter, TermLogger, TerminalMode};
+use simplelog::{Config as LogConfig, LevelFilter, SimpleLogger};
 use snafu::{ensure, OptionExt, ResultExt};
 use std::collections::HashMap;
 use std::env;
@@ -28,8 +33,10 @@ use model::modeled_types::Identifier;
 const DEFAULT_API_SOCKET: &str = "/run/api.sock";
 const API_SETTINGS_URI: &str = "/settings";
 const ENV_FILE_DIR: &str = "/etc/host-containers";
+const PERSISTENT_STORAGE_BASE_DIR: &str = "/local/host-containers";
 
 const SYSTEMCTL_BIN: &str = "/bin/systemctl";
+const HOST_CTR_BIN: &str = "/bin/host-ctr";
 
 mod error {
     use http::StatusCode;
@@ -69,9 +76,6 @@ mod error {
             source: serde_json::Error,
         },
 
-        #[snafu(display("settings.host_containers missing in API response"))]
-        MissingSettings {},
-
         #[snafu(display("Host containers '{}' missing field '{}'", name, field))]
         MissingField { name: String, field: String },
 
@@ -90,15 +94,33 @@ mod error {
             source: std::io::Error,
         },
 
-        #[snafu(display("Systemd command failed - stderr: {}",
-                        std::str::from_utf8(&output.stderr).unwrap_or_else(|_| "<invalid UTF-8>")))]
-        SystemdCommandFailure { output: Output },
+        #[snafu(display("'{}' failed - stderr: {}",
+                        bin_path, std::str::from_utf8(&output.stderr).unwrap_or_else(|_| "<invalid UTF-8>")))]
+        CommandFailure { bin_path: String, output: Output },
 
         #[snafu(display("Failed to manage {} of {} host containers", failed, tried))]
         ManageContainersFailed { failed: usize, tried: usize },
 
         #[snafu(display("Logger setup error: {}", source))]
-        Logger { source: simplelog::TermLogError },
+        Logger { source: log::SetLoggerError },
+
+        #[snafu(display("Unable to base64 decode user-data '{}': '{}'", base64_string, source))]
+        Base64Decode {
+            base64_string: String,
+            source: base64::DecodeError,
+        },
+
+        #[snafu(display("Failed to create directory '{}': '{}'", dir.display(), source))]
+        Mkdir {
+            dir: PathBuf,
+            source: std::io::Error,
+        },
+
+        #[snafu(display("Failed to write user-data for host container '{}': {}", name, source))]
+        UserDataWrite {
+            name: String,
+            source: std::io::Error,
+        },
     }
 }
 
@@ -132,7 +154,8 @@ where
     let settings: model::Settings =
         serde_json::from_str(&response_body).context(error::ResponseJson { method, uri })?;
 
-    settings.host_containers.context(error::MissingSettings)
+    // If host containers aren't defined, return an empty map
+    Ok(settings.host_containers.unwrap_or_default())
 }
 
 /// SystemdUnit stores the systemd unit being manipulated
@@ -145,25 +168,62 @@ impl<'a> SystemdUnit<'a> {
         SystemdUnit { unit }
     }
 
+    fn is_enabled(&self) -> Result<bool> {
+        match command(SYSTEMCTL_BIN, &["is-enabled", &self.unit]) {
+            Ok(()) => Ok(true),
+            Err(e) => {
+                // If the systemd unit is not enabled, then `systemctl is-enabled` will return a
+                // non-zero exit code.
+                match e {
+                    error::Error::CommandFailure { .. } => Ok(false),
+                    _ => {
+                        // Otherwise, we return the error
+                        Err(e)
+                    }
+                }
+            }
+        }
+    }
+
+    fn is_active(&self) -> Result<bool> {
+        match command(SYSTEMCTL_BIN, &["is-active", &self.unit]) {
+            Ok(()) => Ok(true),
+            Err(e) => {
+                // If the systemd unit is not active(running), then `systemctl is-active` will
+                // return a non-zero exit code.
+                match e {
+                    error::Error::CommandFailure { .. } => Ok(false),
+                    _ => {
+                        // Otherwise, we return the error
+                        Err(e)
+                    }
+                }
+            }
+        }
+    }
+
     fn enable_and_start(&self) -> Result<()> {
         // We enable/start units with --no-block to work around cyclic dependency issues at boot
         // time.  It would probably be better to give systemd more of a chance to tell us that
         // something failed to start, if dependencies can be resolved in another way.
-        systemctl(&["enable", &self.unit, "--now", "--no-block"])
+        command(
+            SYSTEMCTL_BIN,
+            &["enable", &self.unit, "--now", "--no-block"],
+        )
     }
 
     fn disable_and_stop(&self) -> Result<()> {
-        systemctl(&["disable", &self.unit, "--now"])
+        command(SYSTEMCTL_BIN, &["disable", &self.unit, "--now"])
     }
 }
 
-/// Wrapper around process::Command for systemctl that adds error checking.
-fn systemctl<I, S>(args: I) -> Result<()>
+/// Wrapper around process::Command that adds error checking.
+fn command<I, S>(bin_path: &str, args: I) -> Result<()>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut command = Command::new(SYSTEMCTL_BIN);
+    let mut command = Command::new(bin_path);
     command.args(args);
     let output = command
         .output()
@@ -174,7 +234,7 @@ where
 
     ensure!(
         output.status.success(),
-        error::SystemdCommandFailure { output }
+        error::CommandFailure { bin_path, output }
     );
     Ok(())
 }
@@ -272,6 +332,7 @@ fn handle_host_container<S>(name: S, image_details: &model::ContainerImage) -> R
 where
     S: AsRef<str>,
 {
+    // Get basic settings, as retrieved from API.
     let name = name.as_ref();
     let source = image_details.source.as_ref().context(error::MissingField {
         name,
@@ -291,6 +352,19 @@ where
         name, enabled
     );
 
+    // If user data was specified, unencode it and write it out before we start the container.
+    if let Some(user_data) = &image_details.user_data {
+        let decoded_bytes = base64::decode(user_data.as_bytes()).context(error::Base64Decode {
+            base64_string: user_data.as_ref(),
+        })?;
+
+        let dir = Path::new(PERSISTENT_STORAGE_BASE_DIR).join(name);
+        fs::create_dir_all(&dir).context(error::Mkdir { dir: &dir })?;
+
+        let path = dir.join("user-data");
+        fs::write(path, decoded_bytes).context(error::UserDataWrite { name })?;
+    }
+
     // Write the environment file needed for the systemd service to have details about this
     // specific host container
     write_env_file(name, source, enabled, superpowered)?;
@@ -298,11 +372,27 @@ where
     // Now start/stop the container according to the 'enabled' setting
     let unit_name = format!("host-containers@{}.service", name);
     let systemd_unit = SystemdUnit::new(&unit_name);
+    let host_containerd_unit = SystemdUnit::new("host-containerd.service");
 
     if enabled {
+        // If this particular host-container was previously disabled. Let's make sure there's no
+        // lingering container tasks left over previously that host-ctr might bind to.
+        // We want to ensure we're running the host-container with the latest configuration.
+        //
+        // We only attempt to do this only if host-containerd is active and running
+        if host_containerd_unit.is_active()? && !systemd_unit.is_enabled()? {
+            command(HOST_CTR_BIN, &["clean-up", "--container-id", name])?;
+        }
         systemd_unit.enable_and_start()?;
     } else {
         systemd_unit.disable_and_stop()?;
+
+        // Ensure there's no lingering host-container after it's been disabled.
+        //
+        // We only attempt to do this only if host-containerd is active and running
+        if host_containerd_unit.is_active()? {
+            command(HOST_CTR_BIN, &["clean-up", "--container-id", name])?;
+        }
     }
 
     Ok(())
@@ -311,8 +401,8 @@ where
 async fn run() -> Result<()> {
     let args = parse_args(env::args());
 
-    // TerminalMode::Mixed will send errors to stderr and anything less to stdout.
-    TermLogger::init(args.log_level, LogConfig::default(), TerminalMode::Mixed)
+    // SimpleLogger will send errors to stderr and anything less to stdout.
+    SimpleLogger::init(args.log_level, LogConfig::default())
         .context(error::Logger)?;
 
     info!("host-containers started");

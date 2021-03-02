@@ -1,0 +1,33 @@
+[configuration-files.containerd-config-toml]
+# No override to path
+template-path = "/usr/share/templates/containerd-config-toml_aws-ecs-1"
+
+# Docker
+[services.docker]
+restart-commands = ["/bin/systemctl try-restart docker.service"]
+configuration-files = ["proxy-env"]
+
+# ECS
+[services.ecs]
+restart-commands = ["/usr/bin/ecs-settings-applier", "/bin/systemctl try-reload-or-restart ecs.service"]
+configuration-files = ["ecs-config"]
+
+[configuration-files.ecs-config]
+path = "/etc/ecs/ecs.config"
+template-path = "/usr/share/templates/ecs.config"
+
+[metadata.settings.ecs]
+affected-services = ["ecs"]
+
+[settings.ecs]
+allow-privileged-containers = false
+logging-drivers = ["json-file", "awslogs", "none"]
+loglevel = "info"
+
+# Metrics
+[settings.metrics]
+service-checks = ["apiserver", "chronyd", "containerd", "host-containerd", "docker", "ecs"]
+
+# Network
+[metadata.settings.network]
+affected-services = ["containerd", "docker", "ecs", "host-containerd"]

@@ -9,8 +9,8 @@ build = "build.rs"
 path = "pkg.rs"
 
 [[package.metadata.build-package.external-files]]
-url = "https://github.com/linux-audit/audit-userspace/archive/v2.8.5/audit-userspace-2.8.5.tar.gz"
-sha512 = "2b42791c53a610635f843b6b32e32ef36be36159d98ed69a7ce1cac32e5f28fbebfe8c113df4b09ea7dc80121e26d5ddbd3d8e499ee709f8479c2ae1dd0af937"
+url = "https://github.com/linux-audit/audit-userspace/archive/v3.0.1/audit-userspace-3.0.1.tar.gz"
+sha512 = "2c77c5a62c8693fcf5727098fb8219b876b0ccc49638c521386b1795bf4febfac48994e505cc8c439ad952c57935ebafa82fe3874f3c5a88be4f0560f0f31abe"
 
 [build-dependencies]
 glibc = { path = "../glibc" }

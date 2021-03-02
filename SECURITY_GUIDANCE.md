@@ -13,6 +13,7 @@ We provide these recommendations, along with [details](#details) and [examples](
 | [Restrict access to the host API socket](#restrict-access-to-the-host-api-socket)                   | Critical  |
 | [Restrict access to the container runtime socket](#restrict-access-to-the-container-runtime-socket) | Critical  |
 | [Design for host replacement](#design-for-host-replacement)                                         | Important |
+| [Enable kernel lockdown](#enable-kernel-lockdown)                                                   | Important |
 | [Limit use of host containers](#limit-use-of-host-containers)                                       | Important |
 | [Limit use of privileged SELinux labels](#limit-use-of-privileged-selinux-labels)                   | Important |
 | [Limit access to system mounts](#limit-access-to-system-mounts)                                     | Important |
@@ -44,8 +45,7 @@ Seccomp filters can be used to allow access to a subset of syscalls.
 Bottlerocket uses `containerd` as the container runtime which provides [a default seccomp profile](https://github.com/containerd/containerd/blob/master/contrib/seccomp/seccomp_default.go).
 
 SELinux labels are part of mandatory access controls, which impose constraints after discretionary access controls are checked.
-Bottlerocket runs all containers with the unprivileged `container_t` label today.
-However, privileged containers may run with the privileged `super_t` label in the future.
+Bottlerocket runs unprivileged containers with the restrictive `container_t` label.
 
 Orchestrators provide ways to disable these protections:
 * Docker can run containers with the `--privileged` flag
@@ -104,6 +104,28 @@ If the kernel is ever compromised through a local exploit, then other defenses m
 
 We recommend designing for periodic host replacement even with automated updates enabled.
 
+### Enable kernel lockdown
+
+The security mechanisms in Bottlerocket ultimately depend on the kernel for enforcement.
+This includes access controls such as capabilities and SELinux, and integrity checks such as dm-verity.
+Modifications to the running kernel could bypass or subvert these mechanisms.
+
+Bottlerocket enables the Lockdown security module and offers settings to choose from one of three modes.
+
+The first mode, "none", effectively disables the protection.
+This is the default in today's [variants](variants/) of Bottlerocket, for compatibility with existing deployments.
+
+The second mode, "integrity", blocks most ways to overwrite the kernel's memory and modify its code.
+This will become the default in future variants.
+Enabling this mode will prevent unsigned kernel modules from being loaded.
+
+The third mode, "confidentiality", stops most ways of reading the kernel's memory from userspace.
+The goal is to protect secrets that may be stored in the kernel, such as keys used to detect modification while the system is offline.
+Bottlerocket does not make use of the secrets that this mode is meant to protect.
+Enabling this mode will break BPF, perf, and any other tools that rely on reading kernel memory.
+
+We recommend enabling kernel lockdown in "integrity" mode.
+
 ### Limit use of host containers
 
 Bottlerocket offers host containers to provide out-of-band access to the underlying host OS.
@@ -135,9 +157,12 @@ These changes are called "transitions".
 The SELinux policy for Bottlerocket defines special transition rules for container runtimes.
 
 A container runtime can transition a child processes to any of these labels:
-* `container_t` (the default, for ordinary containers)
-* `control_t` (for containers that need to access the API)
-* `super_t` (for "superpowered" containers)
+* `container_t` (the default for ordinary containers)
+* `control_t` (the default for privileged containers)
+* `super_t` (opt-in for "superpowered" containers)
+
+The `control_t` and `super_t` labels allow writes to the API socket.
+The `super_t` label allows modifications to any file or directory on the host OS.
 
 Some orchestrators allow SELinux labels to be defined in the container specification, including Kubernetes and Amazon ECS.
 If `control_t` or `super_t` is specified in this way, it will override the default transition rules and the container will run with additional privileges.
@@ -169,6 +194,10 @@ Namespaces are one of the key building blocks for Linux containers.
 Network namespaces provide isolation for network resources such as IP addresses, ports, and routing tables.
 Containers that share the host network namespace can connect to services listening on the host loopback addresses `127.0.0.1` and `::1`.
 These services are not otherwise reachable from the network.
+
+Sharing the network namespace also enables access to abstract sockets.
+Containers that share the host network namespace can send messages to processes on the host which expose APIs over abstract sockets.
+This can bypass intended restrictions for API access.
 
 PID namespaces provide isolation for the process ID number space.
 Containers that share the host PID namespace can interact with processes running on the host.
@@ -219,6 +248,11 @@ These settings can passed as [user data](https://docs.aws.amazon.com/AWSEC2/late
 They apply to any Bottlerocket variant.
 
 ```
+# Enable kernel lockdown in "integrity" mode.
+# This prevents modifications to the running kernel, even by privileged users.
+[settings.kernel]
+lockdown = "integrity"
+
 # The admin host container provides SSH access and runs with "superpowers".
 # It is disabled by default, but can be disabled explicitly.
 [settings.host-containers.admin]

@@ -1,5 +1,4 @@
 use crate::{error, Metadata, Migration, MigrationData, Result};
-use apiserver::datastore;
 use serde::Serialize;
 use snafu::{OptionExt, ResultExt};
 use std::collections::HashMap;
@@ -244,7 +243,10 @@ impl Migration for ReplaceStringMigration {
                             self.setting, self.old_val, self.new_val
                         );
                     } else {
-                        println!("'{}' is not set to '{}', leaving alone", self.setting, self.old_val);
+                        println!(
+                            "'{}' is not set to '{}', leaving alone",
+                            self.setting, self.old_val
+                        );
                     }
                 }
                 _ => {
@@ -271,7 +273,10 @@ impl Migration for ReplaceStringMigration {
                             self.setting, self.new_val, self.old_val
                         );
                     } else {
-                        println!("'{}' is not set to '{}', leaving alone", self.setting, self.new_val);
+                        println!(
+                            "'{}' is not set to '{}', leaving alone",
+                            self.setting, self.new_val
+                        );
                     }
                 }
                 _ => {
@@ -285,6 +290,265 @@ impl Migration for ReplaceStringMigration {
             println!("Found no '{}' to change on downgrade", self.setting);
         }
         Ok(input)
+    }
+}
+
+// =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=
+
+/// We use this migration when we need to replace settings that contain lists of string values;
+/// for example, when a release changes the list of configuration-files associated with a service.
+// String is the only type we use today, and handling multiple value types is more complicated than
+// we need at the moment.  Allowing &[serde_json::Value] seems nice, but it would allow arbitrary
+// data transformations that the API model would then fail to load.
+
+pub struct ListReplacement {
+    pub setting: &'static str,
+    pub old_vals: &'static [&'static str],
+    pub new_vals: &'static [&'static str],
+}
+
+pub struct ReplaceListsMigration(pub Vec<ListReplacement>);
+
+impl Migration for ReplaceListsMigration {
+    fn forward(&mut self, mut input: MigrationData) -> Result<MigrationData> {
+        for replacement in &self.0 {
+            if let Some(data) = input.data.get_mut(replacement.setting) {
+                match data {
+                    serde_json::Value::Array(data) => {
+                        // We only handle string lists; convert each value to a str we can compare.
+                        let list: Vec<&str> = data
+                            .iter()
+                            .map(|v| v.as_str())
+                            .collect::<Option<Vec<&str>>>()
+                            .with_context(|| error::ReplaceListContents {
+                                setting: replacement.setting,
+                                data: data.clone(),
+                            })?;
+
+                        if list == replacement.old_vals {
+                            // Convert back to the original type so we can store it.
+                            *data = replacement.new_vals.iter().map(|s| (*s).into()).collect();
+                            println!(
+                                "Changed value of '{}' from {:?} to {:?} on upgrade",
+                                replacement.setting, replacement.old_vals, replacement.new_vals
+                            );
+                        } else {
+                            println!(
+                                "'{}' is not set to {:?}, leaving alone",
+                                replacement.setting, list
+                            );
+                        }
+                    }
+                    _ => {
+                        println!(
+                            "'{}' is set to non-list value '{}'; ReplaceListsMigration only handles lists",
+                            replacement.setting, data
+                        );
+                    }
+                }
+            } else {
+                println!("Found no '{}' to change on upgrade", replacement.setting);
+            }
+        }
+        Ok(input)
+    }
+
+    fn backward(&mut self, mut input: MigrationData) -> Result<MigrationData> {
+        for replacement in &self.0 {
+            if let Some(data) = input.data.get_mut(replacement.setting) {
+                match data {
+                    serde_json::Value::Array(data) => {
+                        // We only handle string lists; convert each value to a str we can compare.
+                        let list: Vec<&str> = data
+                            .iter()
+                            .map(|v| v.as_str())
+                            .collect::<Option<Vec<&str>>>()
+                            .with_context(|| error::ReplaceListContents {
+                                setting: replacement.setting,
+                                data: data.clone(),
+                            })?;
+
+                        if list == replacement.new_vals {
+                            // Convert back to the original type so we can store it.
+                            *data = replacement.old_vals.iter().map(|s| (*s).into()).collect();
+                            println!(
+                                "Changed value of '{}' from {:?} to {:?} on downgrade",
+                                replacement.setting, replacement.new_vals, replacement.old_vals
+                            );
+                        } else {
+                            println!(
+                                "'{}' is not set to {:?}, leaving alone",
+                                replacement.setting, list
+                            );
+                        }
+                    }
+                    _ => {
+                        println!(
+                        "'{}' is set to non-list value '{}'; ReplaceListsMigration only handles lists",
+                        replacement.setting, data
+                    );
+                    }
+                }
+            } else {
+                println!("Found no '{}' to change on downgrade", replacement.setting);
+            }
+        }
+        Ok(input)
+    }
+}
+
+#[cfg(test)]
+mod test_replace_list {
+    use super::{ListReplacement, ReplaceListsMigration};
+    use crate::{Migration, MigrationData};
+    use maplit::hashmap;
+    use std::collections::HashMap;
+
+    #[test]
+    fn single() {
+        let data = MigrationData {
+            data: hashmap! {
+                "hi".into() => vec!["there"].into(),
+            },
+            metadata: HashMap::new(),
+        };
+        let result = ReplaceListsMigration(vec![ListReplacement {
+            setting: "hi",
+            old_vals: &["there"],
+            new_vals: &["sup"],
+        }])
+        .forward(data)
+        .unwrap();
+        assert_eq!(
+            result.data,
+            hashmap! {
+                "hi".into() => vec!["sup"].into(),
+            }
+        );
+    }
+
+    #[test]
+    fn backward() {
+        let data = MigrationData {
+            data: hashmap! {
+                "hi".into() => vec!["there"].into(),
+            },
+            metadata: HashMap::new(),
+        };
+        let result = ReplaceListsMigration(vec![ListReplacement {
+            setting: "hi",
+            old_vals: &["sup"],
+            new_vals: &["there"],
+        }])
+        .backward(data)
+        .unwrap();
+        assert_eq!(
+            result.data,
+            hashmap! {
+                "hi".into() => vec!["sup"].into(),
+            }
+        );
+    }
+
+    #[test]
+    fn multiple() {
+        let data = MigrationData {
+            data: hashmap! {
+                "hi".into() => vec!["there", "you"].into(),
+                "hi2".into() => vec!["hey", "listen"].into(),
+                "ignored".into() => vec!["no", "change"].into(),
+            },
+            metadata: HashMap::new(),
+        };
+        let result = ReplaceListsMigration(vec![
+            ListReplacement {
+                setting: "hi",
+                old_vals: &["there", "you"],
+                new_vals: &["sup", "hey"],
+            },
+            ListReplacement {
+                setting: "hi2",
+                old_vals: &["hey", "listen"],
+                new_vals: &["look", "watch out"],
+            },
+        ])
+        .forward(data)
+        .unwrap();
+        assert_eq!(
+            result.data,
+            hashmap! {
+                "hi".into() => vec!["sup", "hey"].into(),
+                "hi2".into() => vec!["look", "watch out"].into(),
+                "ignored".into() => vec!["no", "change"].into(),
+            }
+        );
+    }
+
+    #[test]
+    fn no_match() {
+        let data = MigrationData {
+            data: hashmap! {
+                "hi".into() => vec!["no", "change"].into(),
+                "hi2".into() => vec!["no", "change"].into(),
+            },
+            metadata: HashMap::new(),
+        };
+        let result = ReplaceListsMigration(vec![ListReplacement {
+            setting: "hi",
+            old_vals: &["there"],
+            new_vals: &["sup", "hey"],
+        }])
+        .forward(data)
+        .unwrap();
+        // No change
+        assert_eq!(
+            result.data,
+            hashmap! {
+                "hi".into() => vec!["no", "change"].into(),
+                "hi2".into() => vec!["no", "change"].into(),
+            }
+        );
+    }
+
+    #[test]
+    fn not_list() {
+        let data = MigrationData {
+            data: hashmap! {
+                "hi".into() => "just a string, not a list".into(),
+            },
+            metadata: HashMap::new(),
+        };
+        let result = ReplaceListsMigration(vec![ListReplacement {
+            setting: "hi",
+            old_vals: &["there"],
+            new_vals: &["sup", "hey"],
+        }])
+        .forward(data)
+        .unwrap();
+        // No change
+        assert_eq!(
+            result.data,
+            hashmap! {
+                "hi".into() => "just a string, not a list".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn not_string() {
+        let data = MigrationData {
+            data: hashmap! {
+                "hi".into() => vec![0].into(),
+            },
+            metadata: HashMap::new(),
+        };
+        ReplaceListsMigration(vec![ListReplacement {
+            setting: "hi",
+            old_vals: &["there"],
+            new_vals: &["sup", "hey"],
+        }])
+        .forward(data)
+        .unwrap_err();
     }
 }
 
@@ -348,11 +612,8 @@ impl ReplaceTemplateMigration {
             .context(error::DeserializeDatastore)?;
         // Same for "os.*"
         let os_data: HashMap<String, serde_json::Value> =
-            datastore::deserialization::from_map_with_prefix(
-                Some("os".to_string()),
-                &datastore,
-            )
-            .context(error::DeserializeDatastore)?;
+            datastore::deserialization::from_map_with_prefix(Some("os".to_string()), &datastore)
+                .context(error::DeserializeDatastore)?;
 
         let mut structured_data = HashMap::new();
         structured_data.insert("settings", settings_data);
@@ -476,5 +737,108 @@ impl Migration for ReplaceTemplateMigration {
             println!("Found no '{}' to change on downgrade", self.setting);
         }
         Ok(input)
+    }
+}
+
+// =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=
+
+/// We use this migration when we add metadata and want to make sure they're removed before we go
+/// back to old versions that don't understand them.
+#[derive(Debug)]
+pub struct SettingMetadata {
+    pub setting: &'static str,
+    pub metadata: &'static [&'static str],
+}
+
+pub struct AddMetadataMigration(pub &'static [SettingMetadata]);
+
+impl Migration for AddMetadataMigration {
+    /// New versions must have the metadata already defined in defaults.
+    fn forward(&mut self, input: MigrationData) -> Result<MigrationData> {
+        println!(
+            "AddMetadataMigration({:?}) has no work to do on upgrade.",
+            &self.0
+        );
+        Ok(input)
+    }
+
+    /// Older versions might break with certain settings metadata (such as with setting-generators)
+    /// so we need to remove them.
+    fn backward(&mut self, mut input: MigrationData) -> Result<MigrationData> {
+        for setting_metadata in self.0 {
+            if let Some(found_metadata) = input.metadata.get_mut(setting_metadata.setting) {
+                for metadata in setting_metadata.metadata {
+                    if let Some(metadata_value) = found_metadata.remove(*metadata) {
+                        println!(
+                            "Removed {}, which was set to '{}'",
+                            metadata, metadata_value
+                        );
+                    } else {
+                        println!(
+                            "Found no metadata '{}' to remove on setting '{}'",
+                            metadata, setting_metadata.setting
+                        );
+                    }
+                }
+            } else {
+                println!(
+                    "Found no metadata for '{}' setting",
+                    setting_metadata.setting
+                );
+            }
+        }
+        Ok(input)
+    }
+}
+
+#[cfg(test)]
+mod test_add_metadata {
+    use super::{AddMetadataMigration, SettingMetadata};
+    use crate::{Migration, MigrationData};
+    use maplit::hashmap;
+    use std::collections::HashMap;
+
+    #[test]
+    fn backward() {
+        let data = MigrationData {
+            data: HashMap::new(),
+            metadata: hashmap! {
+                "hi".into() => hashmap!{"there".into() => "whatever".into()},
+            },
+        };
+        let result = AddMetadataMigration(&[SettingMetadata {
+            setting: "hi",
+            metadata: &["there"],
+        }])
+        .backward(data)
+        .unwrap();
+        assert_eq!(
+            result.metadata,
+            hashmap! {
+                "hi".into() => HashMap::new().into(),
+            }
+        );
+    }
+
+    #[test]
+    fn backward_noop() {
+        let data = MigrationData {
+            data: HashMap::new(),
+            metadata: hashmap! {
+                "hi".into() => hashmap!{"sup".into() => "wassup".into()},
+            },
+        };
+        let result = AddMetadataMigration(&[SettingMetadata {
+            setting: "hi",
+            metadata: &["there"],
+        }])
+        .backward(data)
+        .unwrap();
+        assert_eq!(
+            result.metadata,
+            hashmap! {
+                "hi".into() => hashmap!{"sup".into() => "wassup".into()},
+            }
+        );
     }
 }

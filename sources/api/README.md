@@ -24,7 +24,7 @@ It's described in context in the [API server docs](apiserver/).
 
 Users can access the API through the `apiclient` binary.
 It's available in Bottlerocket, whether you're accessing it through a control channel like SSM or the admin container.
-(See the top-level [README](../../) for information about those.)
+(See the top-level [README](../../README.md#exploration) for information about those.)
 
 Rust code can use the `apiclient` library to make requests to the Unix-domain socket of the [apiserver](#apiserver).
 
@@ -49,7 +49,7 @@ On first boot, [storewolf](#storewolf) hasn’t run yet, so there’s no data st
 
 storewolf owns the creation and initial population of the data store.
 
-storewolf ensures the default values (defined in [defaults.toml](../models/defaults.toml)) are populated in the data store.
+storewolf ensures the default values (defined in the `defaults.d` directory for each variant) are populated in the data store.
 First, it has to create the data store directories and symlinks if they don’t exist.
 Then, it goes key-by-key through the defaults, and if a key isn’t already set, sets it with the default value.
 
@@ -108,7 +108,7 @@ It's called as a prerequisite of other services, like [sundog](#sundog) and [set
 
 Further docs:
 * [thar-be-settings](thar-be-settings/), the tool settings-applier uses
-* [defaults.toml](../models/defaults.toml), which defines our configuration files and services
+* `defaults.d` directories (e.g. [aws-ecs-1](../models/src/aws-ecs-1/defaults.d/)) containing each variant's default settings, including configuration files and services
 
 This is a simple startup service that runs `thar-be-settings --all` to write out all of the configuration files that are based on our settings.
 

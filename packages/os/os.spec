@@ -1,4 +1,5 @@
 %global _cross_first_party 1
+%global _is_k8s_variant %(if echo %{_cross_variant} | grep -q "k8s"; then echo 1; else echo 0; fi)
 %undefine _debugsource_packages
 
 Name: %{_cross_os}os
@@ -20,6 +21,7 @@ Source3: eni-max-pods
 #SourceX: root.json
 
 Source5: updog-toml
+Source6: metricdog-toml
 
 # 1xx sources: systemd units
 Source100: apiserver.service
@@ -30,6 +32,8 @@ Source105: settings-applier.service
 Source106: migrator.service
 Source107: host-containers@.service
 Source110: mark-successful-boot.service
+Source111: metricdog.service
+Source112: metricdog.timer
 
 # 2xx sources: tmpfilesd configs
 Source200: migration-tmpfiles.conf
@@ -70,8 +74,11 @@ Requires: %{_cross_os}apiserver = %{version}-%{release}
 Summary: Updates settings dynamically based on user-specified generators
 Requires: %{_cross_os}apiserver = %{version}-%{release}
 Requires: %{_cross_os}schnauzer = %{version}-%{release}
+%if %{_is_k8s_variant}
 Requires: %{_cross_os}pluto = %{version}-%{release}
+%endif
 Requires: %{_cross_os}bork = %{version}-%{release}
+Requires: %{_cross_os}shibaken = %{version}-%{release}
 %description -n %{_cross_os}sundog
 %{summary}.
 
@@ -91,9 +98,9 @@ Summary: Setting generator for templated settings values.
 %description -n %{_cross_os}schnauzer
 %{summary}.
 
-%package -n %{_cross_os}pluto
-Summary: Dynamic setting generator for kubernetes
-%description -n %{_cross_os}pluto
+%package -n %{_cross_os}shibaken
+Summary: Setting generator for populating admin container user-data from IMDS.
+%description -n %{_cross_os}shibaken
 %{summary}.
 
 %package -n %{_cross_os}thar-be-settings
@@ -157,6 +164,11 @@ Summary: Bottlerocket updater CLI
 %description -n %{_cross_os}updog
 not much what's up with you
 
+%package -n %{_cross_os}metricdog
+Summary: Bottlerocket health metrics sender
+%description -n %{_cross_os}metricdog
+%{summary}.
+
 %package -n %{_cross_os}logdog
 Summary: Bottlerocket log extractor
 %description -n %{_cross_os}logdog
@@ -174,6 +186,19 @@ Summary: Settings generator for ECS
 %{summary}.
 %endif
 
+%if %{_is_k8s_variant}
+%package -n %{_cross_os}pluto
+Summary: Dynamic setting generator for kubernetes
+%description -n %{_cross_os}pluto
+%{summary}.
+
+%package -n %{_cross_os}static-pods
+Summary: Manages user-defined K8S static pods
+Requires: %{_cross_os}apiserver = %{version}-%{release}
+%description -n %{_cross_os}static-pods
+%{summary}.
+%endif
+
 %prep
 %setup -T -c
 %cargo_prep
@@ -186,8 +211,8 @@ mkdir bin
     -p netdog \
     -p sundog \
     -p schnauzer \
-    -p pluto \
     -p bork \
+    -p shibaken \
     -p thar-be-settings \
     -p thar-be-updates \
     -p servicedog \
@@ -198,11 +223,16 @@ mkdir bin
     -p signpost \
     -p updog \
     -p logdog \
+    -p metricdog \
     -p ghostdog \
     -p growpart \
     -p corndog \
 %if "%{_cross_variant}" == "aws-ecs-1"
     -p ecs-settings-applier \
+%endif
+%if %{_is_k8s_variant}
+    -p pluto \
+    -p static-pods \
 %endif
     %{nil}
 
@@ -225,14 +255,17 @@ done
 install -d %{buildroot}%{_cross_bindir}
 for p in \
   apiserver \
-  early-boot-config netdog sundog schnauzer pluto bork corndog \
+  early-boot-config netdog sundog schnauzer bork shibaken corndog \
   thar-be-settings thar-be-updates servicedog host-containers \
   storewolf settings-committer \
   migrator \
-  signpost updog logdog \
+  signpost updog metricdog logdog \
   ghostdog \
 %if "%{_cross_variant}" == "aws-ecs-1"
   ecs-settings-applier \
+%endif
+%if %{_is_k8s_variant}
+  pluto static-pods \
 %endif
 ; do
   install -p -m 0755 ${HOME}/.cache/%{__cargo_target}/release/${p} %{buildroot}%{_cross_bindir}
@@ -268,19 +301,21 @@ install -d %{buildroot}%{_cross_datadir}/bottlerocket
 install -d %{buildroot}%{_cross_sysusersdir}
 install -p -m 0644 %{S:2} %{buildroot}%{_cross_sysusersdir}/api.conf
 
+%if %{_is_k8s_variant}
 install -d %{buildroot}%{_cross_datadir}/eks
 install -p -m 0644 %{S:3} %{buildroot}%{_cross_datadir}/eks
+%endif
 
 install -d %{buildroot}%{_cross_datadir}/updog
 install -p -m 0644 %{_cross_repo_root_json} %{buildroot}%{_cross_datadir}/updog
 
 install -d %{buildroot}%{_cross_templatedir}
-install -p -m 0644 %{S:5} %{buildroot}%{_cross_templatedir}
+install -p -m 0644 %{S:5} %{S:6} %{buildroot}%{_cross_templatedir}
 
 install -d %{buildroot}%{_cross_unitdir}
 install -p -m 0644 \
   %{S:100} %{S:101} %{S:102} %{S:103} %{S:105} \
-  %{S:106} %{S:107} %{S:110} \
+  %{S:106} %{S:107} %{S:110} %{S:111} %{S:112} \
   %{buildroot}%{_cross_unitdir}
 
 install -d %{buildroot}%{_cross_tmpfilesdir}
@@ -323,13 +358,11 @@ install -p -m 0644 %{S:300} %{buildroot}%{_cross_udevrulesdir}/80-ephemeral-stor
 %files -n %{_cross_os}schnauzer
 %{_cross_bindir}/schnauzer
 
-%files -n %{_cross_os}pluto
-%{_cross_bindir}/pluto
-%dir %{_cross_datadir}/eks
-%{_cross_datadir}/eks/eni-max-pods
-
 %files -n %{_cross_os}bork
 %{_cross_bindir}/bork
+
+%files -n %{_cross_os}shibaken
+%{_cross_bindir}/shibaken
 
 %files -n %{_cross_os}thar-be-settings
 %{_cross_bindir}/thar-be-settings
@@ -379,12 +412,29 @@ install -p -m 0644 %{S:300} %{buildroot}%{_cross_udevrulesdir}/80-ephemeral-stor
 %dir %{_cross_templatedir}
 %{_cross_templatedir}/updog-toml
 
+%files -n %{_cross_os}metricdog
+%{_cross_bindir}/metricdog
+%dir %{_cross_templatedir}
+%{_cross_templatedir}/metricdog-toml
+%{_cross_unitdir}/metricdog.service
+%{_cross_unitdir}/metricdog.timer
+
 %files -n %{_cross_os}logdog
 %{_cross_bindir}/logdog
 
 %if "%{_cross_variant}" == "aws-ecs-1"
 %files -n %{_cross_os}ecs-settings-applier
 %{_cross_bindir}/ecs-settings-applier
+%endif
+
+%if %{_is_k8s_variant}
+%files -n %{_cross_os}pluto
+%{_cross_bindir}/pluto
+%dir %{_cross_datadir}/eks
+%{_cross_datadir}/eks/eni-max-pods
+
+%files -n %{_cross_os}static-pods
+%{_cross_bindir}/static-pods
 %endif
 
 %changelog

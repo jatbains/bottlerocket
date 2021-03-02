@@ -4,7 +4,8 @@ This guide will walk you through deploying a Bottlerocket image, and if desired,
 It currently focuses on deploying to AWS, though the tooling is built to support other platforms in the future.
 
 Remember to look at the [TRADEMARKS](TRADEMARKS.md) guide to understand naming concerns.
-You can pass `-e BUILDSYS_NAME=my-name` to `cargo make` commands to change the default name, which is used in file and AMI names.
+You can pass `-e BUILDSYS_NAME=my-name` to `cargo make` commands to change the default "short" name, which is used in file and AMI names.
+You can pass `-e BUILDSYS_PRETTY_NAME="My Name"` to `cargo make` commands to change the default "pretty" name, which is used in the os-release file and some menus.
 
 We'll assume you've been through the [BUILDING](BUILDING.md) guide to make an image.
 
@@ -78,10 +79,11 @@ cargo make revoke-ami -e REVOKE_FROM_USERS=0123456789,9876543210
 
 ## Build a repo
 
+> NOTE: If you intend to replace hosts rather than update them, you don't need to build an update repository.
+
 Bottlerocket uses [TUF repositories](https://theupdateframework.io/overview/) to make system updates available to hosts.
 You can read more about how Bottlerocket uses TUF in the [updater README](sources/updater/README.md#tuf-and-tough).
 
-If you plan to update hosts rather than replace them, you'll need to make a repo.
 Initially, the repo will only contain the image you just built.
 Later, when you build updates, you can [add them to the repo](#configuring-your-repo-location), which allows your hosts to update to new versions.
 (If you don't have an `Infra.toml` file, it will always try to build a brand new repo.)
@@ -234,8 +236,16 @@ There are two ways to point your hosts at your own repo - at build time or at ru
 If you're maintaining your own fork of Bottlerocket, you'd probably want to change the settings at build time, so you don't have to change settings for every host you launch.
 If you're just running a few hosts, or don't want to maintain a fork, then it's easier to change settings at run time.
 
-To change your repo URLs at build time, you would change the `settings.updates.targets-base-url` and `metadata.settings.updates.metadata-base-url.template` settings in [sources/models/defaults.toml](sources/models/defaults.toml).
-This file contains the default settings that will be applied to the host at startup, meaning any host you run already knows to look at your repo.
+To change your repo URLs at build time, you would change the `settings.updates.targets-base-url` and `metadata.settings.updates.metadata-base-url.template` settings.
+
+The default settings are defined in TOML files.
+First, open the directory for your variant under [sources/models/src/](sources/models/src/).
+Then, open the `defaults.d` directory.
+Here, you can have any number of TOML files, or symlinks to shared TOML files, that define your default settings.
+Later files override earlier ones.
+For an example, take a look at the [aws-ecs-1 defaults](sources/models/src/aws-ecs-1/defaults.d/).
+
+These default settings will be applied to your hosts at startup, meaning any host you run would already know to look at your repo.
 (You'll probably want to commit your changes into your fork of the repo; we're working on ways of making it easier to maintain your own model and settings without a fork.)
 
 The easiest way to change your repo URLs at run time is to include the settings changes in user data.

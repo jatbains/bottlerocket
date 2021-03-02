@@ -52,15 +52,29 @@ It supports self-hosted clusters and clusters managed by [EKS](https://aws.amazo
 
 This variant is compatible with Kubernetes 1.18, 1.19, and 1.20 clusters.
 
+### aws-k8s-1.19: Kubernetes 1.19 node
+
+The [aws-k8s-1.19](aws-k8s-1.19/Cargo.toml) variant includes the packages needed to run a Kubernetes node in AWS.
+It supports self-hosted clusters and clusters managed by [EKS](https://aws.amazon.com/eks/).
+
+This variant is compatible with Kubernetes 1.19, 1.20, and 1.21 clusters.
+
 ### aws-ecs-1: Amazon ECS container instance
 
 The [aws-ecs-1](aws-ecs-1/Cargo.toml) variant includes the packages needed to run an [Amazon ECS](https://ecs.aws)
 container instance in AWS.
 
-### aws-dev: Development build
+### aws-dev: AWS development build
 
 The [aws-dev](aws-dev/Cargo.toml) variant has useful packages for local development of the OS.
 It includes tools for troubleshooting as well as Docker for running containers.
+User data will be read from IMDS.
+
+### vmware-dev: VMWare development build
+
+The [vmware-dev](vmware-dev/Cargo.toml) variant has useful packages for local development of the OS, and is intended to run as a VMWare guest.
+It includes tools for troubleshooting as well as Docker for running containers.
+User data will be read from a mounted CD-ROM, either from a file named "user-data" or from an OVF file.
 
 ## Development
 

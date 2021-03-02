@@ -10,5 +10,5 @@ path = "pkg.rs"
 
 [[package.metadata.build-package.external-files]]
 # Use latest-srpm-url.sh to get this.
-url = "https://cdn.amazonlinux.com/blobstore/195cb5ec07623ef7be724bd99bd49eda17ebe7ad82d752d0e39b096de5411500/kernel-5.4.68-34.125.amzn2.src.rpm"
-sha512 = "83833e09f14d8fbabae723051b4f24e9b658502d7286918146f12e26783985161194e8b94eeceea03812738495be87563c9e36738f22ae2a5f93c43b08ab3c52"
+url = "https://cdn.amazonlinux.com/blobstore/cf12975d70edce3beb7042007609dc355b47ce27babb08b436829f7500de6b76/kernel-5.4.95-42.163.amzn2.src.rpm"
+sha512 = "4dcfb86a2664edd9cf08d1f32b388ec6b9874ae62a21fc655aa80599270af5fdf15ff1f4dc250e36e7559a1c8a08901e428823d7c3e212cf13bada298fdf4dbd"

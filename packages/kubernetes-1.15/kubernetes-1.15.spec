@@ -20,16 +20,18 @@ Source2: kubelet-env
 Source3: kubelet-config
 Source4: kubelet-kubeconfig
 Source5: kubernetes-ca-crt
+Source6: kubelet-exec-start-conf
+Source7: kubelet-bootstrap-kubeconfig
+Source8: kubernetes-tmpfiles.conf
 Source1000: clarify.toml
 Patch1: 0001-always-set-relevant-variables-for-cross-compiling.patch
-Patch2: 0002-override-SELinux-label-for-kubelet-plugins.patch
 
 # Fix builds in $GOPATH when using Go 1.13 - drop when we catch up in v1.17.0
 # https://github.com/kubernetes/kubernetes/commit/8618c09
-Patch3: 0003-opt-out-of-module-mode-for-builds.patch
+Patch2: 0002-opt-out-of-module-mode-for-builds.patch
 
-Patch4: 0004-kubelet-block-non-forwarded-packets.patch
-Patch5: 0005-include-etc-hosts-in-eviction-calc.patch
+Patch3: 0003-kubelet-block-non-forwarded-packets.patch
+Patch4: 0004-include-etc-hosts-in-eviction-calc.patch
 
 BuildRequires: git
 BuildRequires: rsync
@@ -79,6 +81,11 @@ install -m 0644 %{S:2} %{buildroot}%{_cross_templatedir}/kubelet-env
 install -m 0644 %{S:3} %{buildroot}%{_cross_templatedir}/kubelet-config
 install -m 0644 %{S:4} %{buildroot}%{_cross_templatedir}/kubelet-kubeconfig
 install -m 0644 %{S:5} %{buildroot}%{_cross_templatedir}/kubernetes-ca-crt
+install -m 0644 %{S:6} %{buildroot}%{_cross_templatedir}/kubelet-exec-start-conf
+install -m 0644 %{S:7} %{buildroot}%{_cross_templatedir}/kubelet-bootstrap-kubeconfig
+
+install -d %{buildroot}%{_cross_tmpfilesdir}
+install -p -m 0644 %{S:8} %{buildroot}%{_cross_tmpfilesdir}/kubernetes.conf
 
 %cross_scan_attribution --clarify %{S:1000} go-vendor vendor
 
@@ -92,6 +99,9 @@ install -m 0644 %{S:5} %{buildroot}%{_cross_templatedir}/kubernetes-ca-crt
 %{_cross_templatedir}/kubelet-env
 %{_cross_templatedir}/kubelet-config
 %{_cross_templatedir}/kubelet-kubeconfig
+%{_cross_templatedir}/kubelet-bootstrap-kubeconfig
+%{_cross_templatedir}/kubelet-exec-start-conf
 %{_cross_templatedir}/kubernetes-ca-crt
+%{_cross_tmpfilesdir}/kubernetes.conf
 
 %changelog

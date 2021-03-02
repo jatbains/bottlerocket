@@ -1,4 +1,4 @@
-version = "1.0.3"
+version = "1.0.6"
 
 [migrations]
 "(0.3.1, 0.3.2)" = ["migrate_v0.3.2_admin-container-v0-5-0.lz4"]
@@ -11,3 +11,21 @@ version = "1.0.3"
 "(1.0.0, 1.0.1)" = []
 "(1.0.1, 1.0.2)" = ["migrate_v1.0.2_add-enable-spot-instance-draining.lz4"]
 "(1.0.2, 1.0.3)" = ["migrate_v1.0.3_add-sysctl.lz4"]
+"(1.0.3, 1.0.4)" = []
+"(1.0.4, 1.0.5)" = [
+    "migrate_v1.0.5_add-lockdown.lz4",
+    "migrate_v1.0.5_sysctl-subcommand.lz4",
+    "migrate_v1.0.5_add-user-data.lz4",
+    "migrate_v1.0.5_add-network-settings.lz4",
+    "migrate_v1.0.5_add-proxy-restart.lz4",
+    "migrate_v1.0.5_add-proxy-services.lz4",
+]
+"(1.0.5, 1.0.6)" = [
+    "migrate_v1.0.6_metricdog-init.lz4",
+    "migrate_v1.0.6_add-static-pods.lz4",
+    "migrate_v1.0.6_kubelet-standalone-tls-settings.lz4",
+    "migrate_v1.0.6_kubelet-standalone-tls-services.lz4",
+    "migrate_v1.0.6_control-container-v0-4-2.lz4",
+    "migrate_v1.0.6_add-shibaken.lz4",
+    "migrate_v1.0.6_admin-container-v0-6-0.lz4",
+]

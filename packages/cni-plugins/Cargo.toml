@@ -9,8 +9,8 @@ build = "build.rs"
 path = "pkg.rs"
 
 [[package.metadata.build-package.external-files]]
-url = "https://github.com/containernetworking/plugins/archive/v0.8.7/plugins-0.8.7.tar.gz"
-sha512 = "1b11b080b1f54a8a792b1048573d7d882603b76929f0c9343eeb2e010f97700c0deea4489faeb493a1aeac12557b6847b26784c378d0430c47de6bdaca6aa70f"
+url = "https://github.com/containernetworking/plugins/archive/v0.9.1/plugins-0.9.1.tar.gz"
+sha512 = "24e8fcedbff2ae7a83aa96085b546b164de6a0884d593e3b5386e9d2de3c4d9a215db9e9405332020cc45c371709a32b600e263e4f8dee62c51adafdc0180f24"
 
 [build-dependencies]
 glibc = { path = "../glibc" }
